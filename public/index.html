@@ -200,21 +200,24 @@
             try {
                 const packet = JSON.parse(event.data);
 
-                switch (packet.type) {
-                    case 'devices':
-                        renderDevices(packet.data);
-                        break;
-                    case 'history':
-                        if (Array.isArray(packet.data)) {
-                            packet.data.forEach(msg => processIncomingMqtt(msg));
-                        }
-                        break;
-                    case 'mqtt_message':
-                        processIncomingMqtt(packet.data);
-                        break;
+                // Se for a carga inicial de sincronização do servidor
+                if (packet.type === 'devices') {
+                    renderDevices(packet.data);
+                    return;
+                }
+                if (packet.type === 'history') {
+                    if (Array.isArray(packet.data)) {
+                        packet.data.forEach(msg => processIncomingMqtt(msg));
+                    }
+                    return;
+                }
+
+                // Se for um pacote dinâmico transmitido de forma transparente pelo túnel
+                if (packet.topic && packet.payload !== undefined) {
+                    processIncomingMqtt(packet); // O pacote já é o dado MQTT puro!
                 }
             } catch (err) {
-                console.error("Erro ao processar pacote:", err);
+                console.error("Erro ao processar dados do túnel:", err);
             }
         };
 
