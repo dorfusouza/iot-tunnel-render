@@ -189,7 +189,7 @@
         const ws = new WebSocket(`${protocol}//${window.location.host}`);
 
         // Banco de dados em memória do Front-End
-        const activeTopics = {}; 
+        const activeTopics = {};
 
         ws.onopen = () => {
             console.log("🚀 Conectado ao Hub Central!");
@@ -225,7 +225,7 @@
         function renderDevices(devices) {
             const container = document.getElementById('devices-container');
             container.innerHTML = '';
-            
+
             Object.entries(devices).forEach(([id, info]) => {
                 const card = document.createElement('div');
                 card.className = 'device-card';
@@ -251,7 +251,7 @@
                 if (typeof payload === 'string' && (payload.startsWith('{') || payload.startsWith('['))) {
                     payload = JSON.parse(payload);
                 }
-            } catch (e) {}
+            } catch (e) { }
 
             // Guarda ou atualiza o tópico na memória do front
             activeTopics[topic] = {
@@ -309,11 +309,11 @@
 
                     row.onclick = (e) => {
                         e.stopPropagation();
-                        
+
                         // Remove seleção antiga e marca a nova
                         document.querySelectorAll('.topic-row').forEach(r => r.classList.remove('selected'));
                         row.classList.add('selected');
-                        
+
                         // Atualiza o painel de leitura da direita
                         window.selectedTopic = node._fullPath;
                         inspectTopic(node._fullPath);
@@ -334,12 +334,12 @@
         function inspectTopic(topicPath) {
             const title = document.getElementById('selected-topic-name');
             const codeBlock = document.getElementById('payload-code');
-            
+
             const target = activeTopics[topicPath];
             if (!target) return;
 
             title.innerText = topicPath;
-            
+
             if (typeof target.payload === 'object') {
                 codeBlock.innerText = JSON.stringify(target.payload, null, 4);
             } else {
@@ -348,4 +348,5 @@
         }
     </script>
 </body>
+
 </html>
