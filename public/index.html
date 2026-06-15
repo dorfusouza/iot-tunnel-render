@@ -1,1 +1,222 @@
-nada a fazer aqui!
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WS MQTT Explorer</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e24; color: #f5f5f6; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Layout Split */
+        #sidebar { width: 350px; background-color: #141419; border-right: 1px solid #2a2a35; display: flex; flex-direction: column; }
+        #tree-container { flex: 1; width: 450px; background-color: #1a1a22; border-right: 1px solid #2a2a35; padding: 15px; overflow-y: auto; }
+        #panel-main { flex: 1; display: flex; flex-direction: column; background-color: #1e1e24; }
+        
+        /* Cabeçalhos */
+        .panel-header { padding: 15px; background-color: #111116; border-bottom: 1px solid #2a2a35; font-weight: bold; font-size: 14px; text-transform: uppercase; color: #a0a0b0; letter-spacing: 1px; }
+        
+        /* Seção Dispositivos (Sidebar esquerdo) */
+        .device-list { padding: 10px; overflow-y: auto; flex: 1; }
+        .device-card { background: #1c1c24; border: 1px solid #2d2d3d; padding: 12px; margin-bottom: 10px; border-radius: 6px; font-size: 13px; line-height: 1.5; }
+        .device-card strong { color: #4fc3f7; }
+        .status-badge { display: inline-block; width: 8px; height: 8px; background: #4caf50; border-radius: 50%; margin-right: 5px; }
+
+        /* Árvore de Tópicos (Estilo MQTT Explorer) */
+        .tree-node { margin-left: 15px; font-family: 'Courier New', Courier, monospace; font-size: 14px; }
+        .topic-row { display: flex; align-items: center; padding: 4px 6px; cursor: pointer; border-radius: 4px; margin: 2px 0; }
+        .topic-row:hover { background-color: #2a2a38; }
+        .topic-row.selected { background-color: #0d47a1; color: #fff; }
+        .topic-name { color: #ffcb6b; font-weight: bold; }
+        .topic-value { color: #c3e88d; margin-left: 10px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+        .icon { margin-right: 6px; color: #80cbc4; }
+
+        /* Painel de Conteúdo (Direita) */
+        #payload-viewer { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
+        .topic-title { font-size: 18px; font-weight: bold; color: #ffcb6b; margin-bottom: 10px; font-family: monospace; }
+        pre { background-color: #141419; border: 1px solid #2a2a35; padding: 15px; border-radius: 6px; overflow-x: auto; font-family: 'Courier New', Courier, monospace; color: #80cbc4; flex: 1; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <div class="panel-header">🔌 Nós Ativos (Heartbeat)</div>
+        <div class="device-list" id="devices-container"></div>
+    </div>
+
+    <div id="tree-container">
+        <div class="panel-header">🌿 Árvore de Tópicos</div>
+        <div id="topic-tree"></div>
+    </div>
+
+    <div id="panel-main">
+        <div class="panel-header">📄 Detalhes do Payload</div>
+        <div id="payload-viewer">
+            <div class="topic-title" id="selected-topic-name">Selecione um tópico para inspecionar...</div>
+            <pre id="payload-code">// O JSON formatado aparecerá aqui...</pre>
+        </div>
+    </div>
+
+    <script>
+        // Configura protocolo seguro (WSS) se estiver rodando na nuvem do Render
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+        // Banco de dados em memória do Front-End
+        const activeTopics = {}; 
+
+        ws.onopen = () => {
+            console.log("🚀 Conectado ao Hub Central!");
+            ws.send(JSON.stringify({ type: 'register', clientType: 'explorer', deviceId: 'browser_explorer' }));
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const packet = JSON.parse(event.data);
+
+                switch (packet.type) {
+                    case 'devices':
+                        renderDevices(packet.data);
+                        break;
+                    case 'history':
+                        if (Array.isArray(packet.data)) {
+                            packet.data.forEach(msg => processIncomingMqtt(msg));
+                        }
+                        break;
+                    case 'mqtt_message':
+                        processIncomingMqtt(packet.data);
+                        break;
+                }
+            } catch (err) {
+                console.error("Erro ao processar pacote:", err);
+            }
+        };
+
+        // Renderiza os nós físicos (Raspberry, Node-RED) na barra lateral esquerda
+        function renderDevices(devices) {
+            const container = document.getElementById('devices-container');
+            container.innerHTML = '';
+            
+            Object.entries(devices).forEach(([id, info]) => {
+                const card = document.createElement('div');
+                card.className = 'device-card';
+                card.innerHTML = `
+                    <span class="status-badge"></span><strong>${id}</strong><br>
+                    IP: ${info.ip || 'N/A'}<br>
+                    Host: ${info.hostname || 'N/A'}<br>
+                    Uptime: ${info.uptime || 0}s | CPU: ${info.cpuTemp || 'N/A'}°C
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Processa mensagens MQTT e as adiciona na estrutura hierárquica
+        function processIncomingMqtt(mqttData) {
+            if (!mqttData || !mqttData.topic) return;
+
+            const topic = mqttData.topic;
+            let payload = mqttData.payload;
+
+            // Tenta converter strings JSON internas para exibição elegante
+            try {
+                if (typeof payload === 'string' && (payload.startsWith('{') || payload.startsWith('['))) {
+                    payload = JSON.parse(payload);
+                }
+            } catch (e) {}
+
+            // Guarda ou atualiza o tópico na memória do front
+            activeTopics[topic] = {
+                payload: payload,
+                timestamp: new Date().toLocaleTimeString()
+            };
+
+            rebuildTree();
+        }
+
+        // Reconstrói a árvore de diretórios baseada nos tópicos com barras '/'
+        function rebuildTree() {
+            const treeRoot = document.getElementById('topic-tree');
+            const currentSelection = window.selectedTopic;
+            treeRoot.innerHTML = '';
+
+            const treeData = {};
+
+            // Transforma a lista plana de tópicos em um objeto aninhado (Árvore)
+            Object.keys(activeTopics).forEach(topic => {
+                const parts = topic.split('/');
+                let currentLevel = treeData;
+
+                parts.forEach((part, index) => {
+                    if (!currentLevel[part]) {
+                        currentLevel[part] = { _isNode: true, _fullPath: parts.slice(0, index + 1).join('/') };
+                    }
+                    currentLevel = currentLevel[part];
+                });
+                currentLevel._value = activeTopics[topic].payload;
+            });
+
+            // Função recursiva para gerar os elementos HTML na tela
+            function generateHTML(obj, container) {
+                Object.keys(obj).forEach(key => {
+                    if (key === '_isNode' || key === '_fullPath' || key === '_value') return;
+
+                    const node = obj[key];
+                    const element = document.createElement('div');
+                    element.className = 'tree-node';
+
+                    const row = document.createElement('div');
+                    row.className = 'topic-row';
+                    if (node._fullPath === currentSelection) row.classList.add('selected');
+
+                    // Se o nível tem um valor final, ele é uma folha (mostra prévia do valor)
+                    const isLeaf = node._value !== undefined;
+                    const displayValue = isLeaf ? (typeof node._value === 'object' ? JSON.stringify(node._value) : node._value) : '';
+
+                    row.innerHTML = `
+                        <span class="icon">${isLeaf ? '📄' : '📁'}</span>
+                        <span class="topic-name">${key}</span>
+                        <span class="topic-value">${displayValue}</span>
+                    `;
+
+                    row.onclick = (e) => {
+                        e.stopPropagation();
+                        
+                        // Remove seleção antiga e marca a nova
+                        document.querySelectorAll('.topic-row').forEach(r => r.classList.remove('selected'));
+                        row.classList.add('selected');
+                        
+                        // Atualiza o painel de leitura da direita
+                        window.selectedTopic = node._fullPath;
+                        inspectTopic(node._fullPath);
+                    };
+
+                    element.appendChild(row);
+                    container.appendChild(element);
+
+                    // Continua descendo as ramificações do tópico
+                    generateHTML(node, element);
+                });
+            }
+
+            generateHTML(treeData, treeRoot);
+        }
+
+        // Exibe o payload detalhado e formatado na área direita
+        function inspectTopic(topicPath) {
+            const title = document.getElementById('selected-topic-name');
+            const codeBlock = document.getElementById('payload-code');
+            
+            const target = activeTopics[topicPath];
+            if (!target) return;
+
+            title.innerText = topicPath;
+            
+            if (typeof target.payload === 'object') {
+                codeBlock.innerText = JSON.stringify(target.payload, null, 4);
+            } else {
+                codeBlock.innerText = String(target.payload);
+            }
+        }
+    </script>
+</body>
+</html>
